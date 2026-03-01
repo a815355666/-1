@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>自動累積獎勵系統 (雲端版)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts: Noto Sans TC -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script>
+        function notReadyAlert() { alert("系統正在連線雲端資料庫，請稍候再試..."); }
+        window.showLoginModal = notReadyAlert;
+        window.closeLoginModal = function() { document.getElementById('login-modal').classList.add('hidden'); };
+        window.handleLoginAction = notReadyAlert;
+        window.handleRegisterAction = notReadyAlert;
+        window.handleLogout = function() {};
+    </script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-analytics.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+        window.db = null;
+        window.auth = null;
+        window.appId = null;
+        window.firestoreReady = false;
+        
+        window.CloudManager = {
+            docId: null,
+            isLoggedIn: false,
+            username: null,
+            
+            init: async function() {
+                try {
+                    const firebaseConfig = {
+                        apiKey: "AIzaSyB2HeIlJGFx9JIcuGvv9QNDfJJDJR5BaIU",
+                        authDomain: "a815355666-cf56b.firebaseapp.com",
+                        projectId: "a815355666-cf56b",
+                        storageBucket: "a815355666-cf56b.firebasestorage.app",
+                        messagingSenderId: "16313919572",
+                        appId: "1:16313919572:web:2ffceaea9952b1d309e5c1",
+                        measurementId: "G-51TP8K4BQY"
+                    };
+                    window.appId = firebaseConfig.projectId; 
+                    const app = initializeApp(firebaseConfig);
+                    window.auth = getAuth(app);
+                    window.db = getFirestore(app);
+                    
+                    onAuthStateChanged(window.auth, async (user) => {
+                        if (user) {
+                            window.firestoreReady = true;
+                            this.bindButtons();
+                            const savedUser = localStorage.getItem('cloud_user');
+                            const savedPass = localStorage.getItem('cloud_pass');
+                            if(savedUser && savedPass && !this.isLoggedIn) {
+                                this.performLogin(savedUser, savedPass, true);
+                            }
+                        }
+                    });
+
+                    if (!window.auth.currentUser) await signInAnonymously(window.auth);
+                } catch (e) { console.error("Init Error:", e); }
+            },
+            
+            bindButtons: function() {
+                window.showLoginModal = () => document.getElementById('login-modal').classList.remove('hidden');
+                window.closeLoginModal = () => document.getElementById('login-modal').classList.add('hidden');
+                window.handleLoginAction = () => {
+                    const u = document.getElementById('login-user').value.trim();
+                    const p = document.getElementById('login-pass').value.trim();
+                    if(u && p) this.performLogin(u, p, false);
+                };
+                window.handleRegisterAction = () => {
+                    const u = document.getElementById('login-user').value.trim();
+                    const p = document.getElementById('login-pass').value.trim();
+                    if(u && p) this.performRegister(u, p);
+                };
+                window.handleLogout = () => { if(confirm('確定要登出嗎？')) this.logout(); };
+            },
+
+            generateId: function(user, pass) { return `user_${user}_${pass}`.replace(/[^a-zA-Z0-9_]/g, ''); },
+
+            performLogin: async function(user, pass, isAuto = false) {
+                if (!window.firestoreReady) return;
+                const docId = this.generateId(user, pass);
+                try {
+                    const docSnap = await getDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'reward_users_v3', docId));
+                    if (docSnap.exists()) {
+                        window.importCloudData(docSnap.data());
+                        this.loginSuccess(user, pass, docId);
+                        if(!isAuto) { alert("登入成功！"); window.closeLoginModal(); }
+                    } else if(!isAuto) { alert("找不到帳號或密碼錯誤。"); }
+                } catch (e) { console.error(e); }
+            },
+
+            performRegister: async function(user, pass) {
+                if (!window.firestoreReady) return;
+                const docId = this.generateId(user, pass);
+                try {
+                    const docSnap = await getDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'reward_users_v3', docId));
+                    if (docSnap.exists()) {
+                        alert("帳號已被註冊！");
+                    } else {
+                        await this.saveDataToCloud(docId, user, true); 
+                        this.loginSuccess(user, pass, docId);
+                        alert("註冊成功！");
+                        window.closeLoginModal();
+                    }
+                } catch (e) { console.error(e); }
+            },
+
+            loginSuccess: function(user, pass, docId) {
+                this.isLoggedIn = true; this.docId = docId; this.username = user;
+                localStorage.setItem('cloud_user', user); localStorage.setItem('cloud_pass', pass);
+                document.getElementById('auth-section-login-btn').classList.add('hidden');
+                document.getElementById('user-status').classList.remove('hidden');
+                document.getElementById('display-username').textContent = user;
+                document.getElementById('cloud-indicator').classList.remove('hidden');
+                
+                // 處理登出按鈕顯示
+                const btnLogout = document.getElementById('btn-logout-actual');
+                if (btnLogout) {
+                    btnLogout.classList.remove('hidden');
+                    btnLogout.classList.add('flex');
+                }
+                
+                this.saveDataToCloud();
+            },
+
+            logout: function() {
+                this.isLoggedIn = false; this.docId = null; this.username = null;
+                localStorage.removeItem('cloud_user'); localStorage.removeItem('cloud_pass');
+                document.getElementById('user-status').classList.add('hidden');
+                document.getElementById('auth-section-login-btn').classList.remove('hidden');
+                document.getElementById('cloud-indicator').classList.add('hidden');
+                
+                // 處理登出按鈕隱藏
+                const btnLogout = document.getElementById('btn-logout-actual');
+                if (btnLogout) {
+                    btnLogout.classList.add('hidden');
+                    btnLogout.classList.remove('flex');
+                }
+                
+                alert("已登出");
+            },
+
+            saveDataToCloud: async function(targetDocId, targetUsername, isNew = false) {
+                const docIdToUse = targetDocId || this.docId;
+                if (!docIdToUse || !window.firestoreReady) return;
+                const dataToSave = {
+                    settings: window.settings,
+                    records: window.records,
+                    shopItems: window.shopItems,
+                    redemptions: window.redemptions,
+                    lastUpdated: new Date().toISOString(),
+                    owner: targetUsername || this.username
+                };
+                await setDoc(doc(window.db, 'artifacts', window.appId, 'public', 'data', 'reward_users_v3', docIdToUse), dataToSave);
+                if(!isNew) {
+                    const indicator = document.getElementById('save-indicator');
+                    if(indicator) { indicator.classList.remove('opacity-0'); setTimeout(() => indicator.classList.add('opacity-0'), 2000); }
+                }
+            },
+            save: function() { if(this.isLoggedIn) this.saveDataToCloud(); }
+        };
+
+        window.CloudManager.init();
+    </script>
+
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #EFEBE9; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .view-container { transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out; }
+        
+        @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .animate-scaleIn { animation: scaleIn 0.2s ease-out; }
+        
+        /* 隱藏數字輸入框的上下箭頭 */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen text-[#3E2723] p-0 md:p-4 box-border">
+
+    <div class="relative w-full max-w-md h-[100vh] md:h-[850px] bg-[#F5F5F5] md:rounded-[40px] shadow-2xl overflow-hidden flex flex-col">
+        
+        <!-- Header 區域 (深咖啡色) -->
+        <header class="bg-[#4E342E] h-52 px-6 pt-10 pb-6 flex flex-col shrink-0 relative z-0">
+            <!-- 上排：標題與登入 -->
+            <div class="flex justify-between items-start">
+                <div class="text-white">
+                    <p class="text-xs opacity-80 mb-1 flex items-center gap-2">
+                        <span>本月狀態</span>
+                        <span id="cloud-indicator" class="hidden text-[10px] bg-white/20 px-2 py-0.5 rounded-full"><i class="fas fa-cloud"></i></span>
+                        <span id="save-indicator" class="opacity-0 transition-opacity duration-500 text-green-300 text-[10px]"><i class="fas fa-check"></i> 已儲存</span>
+                    </p>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-2xl font-bold tracking-wide">
+                            <span id="header-month-display">2026年 1月</span>
+                            <span id="user-status" class="hidden text-sm opacity-80 ml-2 font-normal">(<span id="display-username"></span>)</span>
+                        </h1>
+                    </div>
+                </div>
+
+                <!-- 登入與登出按鈕 -->
+                <div id="auth-section">
+                    <button id="auth-section-login-btn" onclick="showLoginModal()" class="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/30 text-white text-sm px-4 py-1.5 rounded-full transition-all">
+                        <i class="fa-regular fa-user"></i><span>登入</span>
+                    </button>
+                    <button onclick="handleLogout()" class="hidden items-center gap-2 bg-red-500/80 hover:bg-red-600 backdrop-blur-sm border border-red-400 text-white text-xs px-3 py-1.5 rounded-full transition-all" id="btn-logout-actual">
+                        <i class="fas fa-sign-out-alt"></i><span>登出</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 下排：結算與金額 -->
+            <div class="flex justify-between items-center mt-6 pr-2">
+                <!-- 未結算(類似支出欄位樣式) -->
+                <div class="flex flex-col">
+                    <span class="text-xs text-white/80 font-medium mb-1">未結算 (每月<span id="display-settle-day">5</span>號結算)</span>
+                    <span class="text-2xl font-bold text-white tracking-tight">
+                        $ <span id="display-pending">0</span>
+                    </span>
+                </div>
+                
+                <!-- 分隔線 -->
+                <div class="w-[1px] h-10 bg-white/30 mx-4"></div>
+
+                <!-- 收入(可用餘額) -->
+                <div class="flex flex-col items-end">
+                    <span class="text-xs text-[#D7CCC8] font-medium mb-1"><i class="fas fa-coins text-[10px] mr-1"></i>可用金幣</span>
+                    <span class="text-3xl font-black text-[#D7CCC8] tracking-tight drop-shadow-sm">
+                        $ <span id="display-available">0</span>
+                    </span>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主要內容區 (白色卡片，負Margin蓋上來) -->
+        <main class="flex-1 bg-white -mt-10 rounded-t-[30px] relative z-10 flex flex-col shadow-[0_-4px_15px_rgba(0,0,0,0.1)] overflow-hidden">
+            
+            <!-- 裝飾用：頂部的小拉條 -->
+            <div class="w-full flex justify-center pt-3 pb-1 shrink-0 bg-white z-20">
+                <div class="w-12 h-1.5 bg-gray-200 rounded-full"></div>
+            </div>
+
+            <!-- 切換視圖的容器 -->
+            <div class="flex-1 relative overflow-hidden bg-white">
+                
+                <!-- ================= View: Record (打卡輸入) ================= -->
+                <div id="view-record" class="view-container absolute inset-0 flex flex-col z-20 bg-white">
+                    
+                    <!-- 輸入區塊 -->
+                    <div class="px-6 pb-3 shrink-0">
+                        <div class="flex gap-2 relative mt-2">
+                            <div class="absolute inset-y-0 left-4 flex items-center pointer-events-none">
+                                <i class="fas fa-pen text-gray-400"></i>
+                            </div>
+                            <input type="text" id="record-input" class="flex-1 bg-[#F5F5F5] border border-gray-100 text-[#3E2723] rounded-2xl focus:ring-2 focus:ring-[#8D6E63] outline-none pl-10 p-3.5 text-sm transition-shadow font-medium shadow-inner" placeholder="完成什麼項目？ (例: 運動15分)" onkeydown="if(event.key==='Enter') submitRecord()">
+                            <button onclick="submitRecord()" class="bg-[#4E342E] hover:bg-[#3E2723] text-white w-14 rounded-2xl shadow-sm active:scale-95 transition flex items-center justify-center">
+                                <i class="fas fa-paper-plane text-lg"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- 快捷鍵區塊 -->
+                        <div id="quick-actions" class="mt-4 flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                            <!-- JS Render -->
+                        </div>
+                    </div>
+                    
+                    <div class="px-6 py-2 bg-[#F5F5F5] text-xs font-bold text-gray-400 flex justify-between shrink-0 border-y border-[#EFEBE9]">
+                        <span>今日明細</span>
+                        <span id="today-total-display" class="text-[#8D6E63]"></span>
+                    </div>
+
+                    <!-- 列表區塊 -->
+                    <div class="flex-1 overflow-y-auto px-6 pt-4 pb-20 no-scrollbar" id="today-records-list">
+                        <!-- JS Render -->
+                    </div>
+                </div>
+
+                <!-- ================= View: Shop (兌換商店) ================= -->
+                <div id="view-shop" class="view-container absolute inset-0 flex flex-col bg-white transform translate-x-full z-10 opacity-0">
+                    <div class="px-6 pt-2 pb-4 shrink-0 border-b border-[#EFEBE9]">
+                        <div class="flex gap-2">
+                            <input type="text" id="shop-item-input" class="flex-[2] bg-[#F5F5F5] border border-gray-100 text-[#3E2723] rounded-2xl focus:ring-2 focus:ring-[#8D6E63] outline-none p-3.5 text-sm font-medium shadow-inner" placeholder="想買什麼獎勵？">
+                            <input type="number" id="shop-cost-input" class="w-20 md:flex-[1] bg-[#F5F5F5] border border-gray-100 text-[#3E2723] rounded-2xl focus:ring-2 focus:ring-[#8D6E63] outline-none p-3.5 text-center text-sm font-medium shadow-inner" placeholder="$">
+                            <button onclick="addShopItem()" class="bg-[#8D6E63] hover:bg-[#5D4037] text-white rounded-2xl w-14 shadow-sm active:scale-95 transition flex items-center justify-center">
+                                <i class="fas fa-plus text-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-y-auto px-6 pt-4 pb-20 no-scrollbar" id="shop-list">
+                        <!-- JS Render -->
+                    </div>
+                </div>
+
+                <!-- ================= View: History (歷史明細) ================= -->
+                <div id="view-history" class="view-container absolute inset-0 flex flex-col bg-white transform translate-x-full z-10 opacity-0">
+                    <div class="px-6 py-3 bg-[#F5F5F5] border-b border-[#EFEBE9] flex justify-between items-center shrink-0">
+                        <h2 class="font-bold text-gray-500 text-sm"><i class="fas fa-list-ul mr-1"></i> 完整紀錄清單</h2>
+                        <button onclick="forceSettle()" class="text-xs bg-[#D7CCC8]/50 text-[#4E342E] border border-[#D7CCC8] px-3 py-1.5 rounded-full hover:bg-[#D7CCC8]/80 active:scale-95 transition font-medium">
+                            提前結算本期
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto px-6 pt-4 pb-20 no-scrollbar" id="history-list">
+                        <!-- JS Render -->
+                    </div>
+                </div>
+
+                <!-- ================= View: Settings (設定) ================= -->
+                <div id="view-settings" class="view-container absolute inset-0 flex flex-col bg-[#F5F5F5] transform translate-x-full z-10 opacity-0">
+                    <div class="flex-1 overflow-y-auto p-6 space-y-6 pb-24 no-scrollbar">
+                        
+                        <!-- 結算設定 -->
+                        <div class="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
+                            <h3 class="font-bold text-[#4E342E] mb-4 flex items-center gap-2 text-sm"><i class="fas fa-calendar-check text-[#8D6E63]"></i> 自動結算設定</h3>
+                            <div class="flex items-center justify-between bg-[#FAFAFA] p-3 rounded-xl border border-gray-200">
+                                <span class="text-sm text-gray-600 font-medium">每月結算日期</span>
+                                <select id="settle-day-select" onchange="updateSettleDay()" class="bg-white border border-gray-300 rounded-lg p-1.5 text-sm outline-none focus:ring-2 focus:ring-[#8D6E63] font-bold text-[#4E342E]">
+                                    <!-- JS Fill -->
+                                </select>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-3 leading-relaxed">
+                                當結算日到來，系統會自動將前一個週期的「未結算累積」轉入您的「可用金幣」餘額中。
+                            </p>
+                        </div>
+                        
+                        <!-- 項目管理 -->
+                        <div class="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
+                            <h3 class="font-bold text-[#4E342E] mb-2 flex items-center gap-2 text-sm"><i class="fas fa-star text-[#8D6E63]"></i> 快捷項目管理</h3>
+                            <p class="text-[10px] text-gray-400 mb-4">修改您傳送文字時對應的獎勵金額。直接點擊文字即可修改。</p>
+                            <div id="settings-items-list" class="space-y-3">
+                                <!-- JS Render -->
+                            </div>
+                        </div>
+                        
+                        <!-- 資料管理 -->
+                        <div class="bg-white p-5 rounded-[24px] shadow-sm border border-red-50">
+                            <h3 class="font-bold text-red-600 mb-3 text-sm">危險操作</h3>
+                            <button onclick="clearAllData()" class="w-full bg-[#FAFAFA] text-red-500 border border-red-100 py-3 rounded-xl text-sm font-bold hover:bg-red-50 transition">
+                                清除所有資料 (還原預設)
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Bottom Navigation Bar (底部導覽列) -->
+            <nav class="absolute bottom-0 left-0 w-full bg-white/90 backdrop-blur-md border-t border-gray-100 flex justify-around items-center h-[70px] pb-safe shrink-0 px-2 shadow-[0_-10px_30px_rgba(0,0,0,0.05)] z-30">
+                <button onclick="switchTab('record')" id="tab-record" class="flex flex-col items-center justify-center w-16 text-[#4E342E] transition-colors relative group">
+                    <i class="fas fa-pen text-[22px] mb-1 group-active:scale-90 transition-transform"></i>
+                    <span class="text-[10px] font-bold">記一筆</span>
+                </button>
+                <button onclick="switchTab('shop')" id="tab-shop" class="flex flex-col items-center justify-center w-16 text-[#D7CCC8] hover:text-[#8D6E63] transition-colors relative group">
+                    <i class="fas fa-store text-[22px] mb-1 group-active:scale-90 transition-transform"></i>
+                    <span class="text-[10px] font-bold">商店</span>
+                </button>
+                <button onclick="switchTab('history')" id="tab-history" class="flex flex-col items-center justify-center w-16 text-[#D7CCC8] hover:text-[#8D6E63] transition-colors relative group">
+                    <i class="fas fa-list-ul text-[22px] mb-1 group-active:scale-90 transition-transform"></i>
+                    <span class="text-[10px] font-bold">明細</span>
+                </button>
+                <button onclick="switchTab('settings')" id="tab-settings" class="flex flex-col items-center justify-center w-16 text-[#D7CCC8] hover:text-[#8D6E63] transition-colors relative group">
+                    <i class="fas fa-cog text-[22px] mb-1 group-active:scale-90 transition-transform"></i>
+                    <span class="text-[10px] font-bold">設定</span>
+                </button>
+            </nav>
+
+        </main>
+    </div>
+
+    <!-- Modal: 發現新項目 -->
+    <div id="new-item-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-[24px] shadow-2xl w-full max-w-sm overflow-hidden animate-scaleIn">
+            <div class="bg-[#4E342E] p-4 text-white">
+                <h3 class="text-lg font-bold"><i class="fas fa-magic"></i> 發現新項目！</h3>
+            </div>
+            <div class="p-6">
+                <p class="text-sm text-gray-600 mb-4">您輸入了 <span id="new-item-name" class="font-bold text-[#4E342E] bg-[#EFEBE9] px-2 py-0.5 rounded"></span>，這是一個全新的項目。</p>
+                <label class="block text-xs font-bold text-gray-500 mb-2">請問完成一次要獎勵多少金幣？</label>
+                <div class="relative mb-6">
+                    <span class="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">$</span>
+                    <input type="number" id="new-item-reward" class="w-full bg-[#F5F5F5] border border-gray-200 rounded-xl py-3 pl-8 pr-3 outline-none focus:ring-2 focus:ring-[#8D6E63] text-lg font-bold text-[#3E2723] transition" placeholder="例如: 15">
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="closeNewItemModal()" class="flex-1 bg-[#FAFAFA] border border-gray-200 hover:bg-gray-100 text-gray-500 font-bold py-3 rounded-xl transition">取消</button>
+                    <button onclick="confirmNewItem()" class="flex-1 bg-[#4E342E] hover:bg-[#3E2723] text-white font-bold py-3 rounded-xl shadow-md active:scale-95 transition">儲存並打卡</button>
+                </div>
+                <p class="text-[10px] text-gray-400 text-center mt-4">儲存後會建立快捷鍵，下次只需點擊即可！</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: 登入視窗 -->
+    <div id="login-modal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-[24px] shadow-2xl w-full max-w-sm overflow-hidden animate-scaleIn relative">
+            <div class="bg-[#4E342E] p-5 text-white text-center relative">
+                <h3 class="text-lg font-bold tracking-wide">雲端同步帳號</h3>
+                <button onclick="closeLoginModal()" class="absolute top-5 right-5 text-white/70 hover:text-white"><i class="fas fa-times text-lg"></i></button>
+            </div>
+            <div class="p-6 space-y-5">
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 mb-1">帳號名稱</label>
+                    <input type="text" id="login-user" class="w-full bg-[#F5F5F5] border border-gray-200 rounded-xl p-3.5 outline-none focus:ring-2 focus:ring-[#8D6E63] text-[#3E2723] transition font-medium" placeholder="輸入帳號">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 mb-1">密碼</label>
+                    <input type="password" id="login-pass" class="w-full bg-[#F5F5F5] border border-gray-200 rounded-xl p-3.5 outline-none focus:ring-2 focus:ring-[#8D6E63] text-[#3E2723] transition font-medium" placeholder="輸入密碼">
+                </div>
+                <div class="flex flex-col gap-3 mt-6">
+                    <button onclick="handleLoginAction()" class="w-full bg-[#4E342E] hover:bg-[#3E2723] text-white font-bold py-3.5 rounded-xl shadow-md active:scale-95 transition">登入</button>
+                    <button onclick="handleRegisterAction()" class="w-full bg-white border-2 border-[#D7CCC8] hover:bg-[#FAFAFA] text-[#8D6E63] font-bold py-3 rounded-xl active:scale-95 transition">註冊新帳號</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心資料與初始化 ---
+        const DEFAULT_SETTINGS = {
+            items: [
+                { id: 1, name: '做運動15分', reward: 15 },
+                { id: 2, name: '練吉他10分鐘', reward: 10 },
+                { id: 3, name: '看書半小時', reward: 20 }
+            ],
+            settleDay: 5
+        };
+
+        window.settings = JSON.parse(localStorage.getItem('mySettings_v3')) || DEFAULT_SETTINGS;
+        window.records = JSON.parse(localStorage.getItem('myRecords_v3')) || [];
+        window.shopItems = JSON.parse(localStorage.getItem('myShopItems_v3')) || [{ id: 1, text: '買一件衣服', cost: 500 }];
+        window.redemptions = JSON.parse(localStorage.getItem('myRedemptions_v3')) || [];
+
+        let pendingBalance = 0;
+        let availableBalance = 0;
+        let tempNewItemName = "";
+
+        // --- 雲端資料匯入 ---
+        window.importCloudData = function(data) {
+            if(data.settings) window.settings = data.settings;
+            if(data.records) window.records = data.records;
+            if(data.shopItems) window.shopItems = data.shopItems;
+            if(data.redemptions) window.redemptions = data.redemptions;
+            saveData(false);
+            initApp();
+        };
+
+        // --- 核心運算 ---
+        function formatMoney(amount) {
+            return amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        }
+
+        // 動態判斷圖示
+        function getIconForText(text) {
+            if (text.includes('運動') || text.includes('健身') || text.includes('跑步')) return 'fa-dumbbell';
+            if (text.includes('吉他') || text.includes('樂器') || text.includes('鋼琴')) return 'fa-guitar';
+            if (text.includes('書') || text.includes('閱讀') || text.includes('學習')) return 'fa-book';
+            if (text.includes('水') || text.includes('喝水')) return 'fa-glass-water';
+            if (text.includes('睡') || text.includes('早起')) return 'fa-bed';
+            if (text.includes('英文') || text.includes('單字')) return 'fa-language';
+            if (text.includes('打掃') || text.includes('家事')) return 'fa-broom';
+            return 'fa-star'; // 預設圖示
+        }
+
+        function calculateBalances() {
+            pendingBalance = 0;
+            let settledTotal = 0;
+            let spentTotal = 0;
+
+            window.records.forEach(r => {
+                if(r.status === 'pending') pendingBalance += r.reward;
+                else if(r.status === 'settled') settledTotal += r.reward;
+            });
+
+            window.redemptions.forEach(r => { spentTotal += r.cost; });
+
+            availableBalance = settledTotal - spentTotal;
+            if(availableBalance < 0) availableBalance = 0; // 防呆
+
+            // 更新 UI (加上千分位)
+            document.getElementById('display-pending').textContent = formatMoney(pendingBalance);
+            document.getElementById('display-available').textContent = formatMoney(availableBalance);
+            document.getElementById('display-settle-day').textContent = window.settings.settleDay;
+            
+            // 更新 Header 的年月
+            const now = new Date();
+            document.getElementById('header-month-display').textContent = `${now.getFullYear()}年 ${now.getMonth() + 1}月`;
+        }
+
+        // 自動結算檢查 (每月X號)
+        function checkAutoSettlement() {
+            const now = new Date();
+            const settleDay = parseInt(window.settings.settleDay) || 5;
+            
+            let settleBound = new Date(now.getFullYear(), now.getMonth(), settleDay, 0, 0, 0);
+            if (now.getDate() < settleDay) settleBound.setMonth(settleBound.getMonth() - 1);
+
+            let changed = false;
+            window.records.forEach(r => {
+                if (r.status === 'pending' && r.timestamp < settleBound.getTime()) {
+                    r.status = 'settled';
+                    changed = true;
+                }
+            });
+
+            if (changed) {
+                saveData();
+                alert(`🎉 結算日到了！前一期的累積已成功轉入可用金幣！\n您現在可以在商店兌換獎勵囉！`);
+            }
+        }
+
+        function saveData(syncToCloud = true) {
+            localStorage.setItem('mySettings_v3', JSON.stringify(window.settings));
+            localStorage.setItem('myRecords_v3', JSON.stringify(window.records));
+            localStorage.setItem('myShopItems_v3', JSON.stringify(window.shopItems));
+            localStorage.setItem('myRedemptions_v3', JSON.stringify(window.redemptions));
+            
+            calculateBalances();
+            
+            if (syncToCloud && window.CloudManager && window.CloudManager.isLoggedIn) {
+                window.CloudManager.save();
+            }
+        }
+
+        function isToday(timestamp) {
+            const today = new Date();
+            const date = new Date(timestamp);
+            return date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, function(m) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]; });
+        }
+
+        // --- View: Record (輸入與今日紀錄) ---
+        function submitRecord(itemName = null) {
+            const inputEl = document.getElementById('record-input');
+            const text = itemName || inputEl.value.trim();
+            if (!text) return;
+
+            const matchedItem = window.settings.items.find(i => i.name === text);
+            if (matchedItem) {
+                addRecordEntry(matchedItem.name, matchedItem.reward);
+                inputEl.value = '';
+            } else {
+                tempNewItemName = text;
+                document.getElementById('new-item-name').textContent = text;
+                document.getElementById('new-item-reward').value = '';
+                document.getElementById('new-item-modal').classList.remove('hidden');
+                setTimeout(() => document.getElementById('new-item-reward').focus(), 100);
+            }
+        }
+
+        function closeNewItemModal() { document.getElementById('new-item-modal').classList.add('hidden'); }
+
+        function confirmNewItem() {
+            const reward = parseInt(document.getElementById('new-item-reward').value);
+            if (isNaN(reward) || reward < 0) { alert('請輸入有效的獎勵金額'); return; }
+
+            window.settings.items.push({ id: Date.now(), name: tempNewItemName, reward: reward });
+            addRecordEntry(tempNewItemName, reward);
+            
+            document.getElementById('record-input').value = '';
+            closeNewItemModal();
+            renderQuickActions(); 
+            renderSettingsItems(); 
+        }
+
+        function addRecordEntry(name, reward) {
+            window.records.push({ id: Date.now(), name: name, reward: reward, timestamp: Date.now(), status: 'pending' });
+            saveData();
+            renderTodayRecords();
+        }
+
+        function deleteRecord(id) {
+            if(confirm('確定要刪除這筆紀錄嗎？這會扣除對應的獎勵。')) {
+                window.records = window.records.filter(r => r.id !== id);
+                saveData(); renderTodayRecords();
+                if (document.getElementById('view-history').classList.contains('z-20')) renderHistory();
+            }
+        }
+
+        function renderQuickActions() {
+            const container = document.getElementById('quick-actions');
+            container.innerHTML = '';
+            window.settings.items.forEach(item => {
+                const btn = document.createElement('button');
+                btn.className = 'flex items-center gap-1.5 whitespace-nowrap bg-white border border-[#EFEBE9] text-[#4E342E] hover:bg-[#F5F5F5] px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors shadow-sm active:scale-95';
+                btn.innerHTML = `<span>${escapeHtml(item.name)}</span> <span class="bg-[#D7CCC8]/40 text-[#4E342E] rounded-full px-1.5 py-0.5 text-[10px] ml-0.5">+$${item.reward}</span>`;
+                btn.onclick = () => submitRecord(item.name);
+                container.appendChild(btn);
+            });
+        }
+
+        function renderTodayRecords() {
+            const listEl = document.getElementById('today-records-list');
+            const totalDisplay = document.getElementById('today-total-display');
+            listEl.innerHTML = '';
+            
+            const todayRecords = window.records.filter(r => isToday(r.timestamp)).sort((a,b) => b.timestamp - a.timestamp);
+            let todayTotal = 0;
+
+            if (todayRecords.length === 0) {
+                listEl.innerHTML = `
+                    <div class="flex flex-col items-center justify-center py-12 text-gray-300">
+                        <i class="fas fa-seedling text-5xl mb-4 opacity-50"></i>
+                        <p class="text-sm">今天還沒開始累積喔，傳送個文字吧！</p>
+                    </div>`;
+            } else {
+                todayRecords.forEach(r => {
+                    todayTotal += r.reward;
+                    const timeStr = new Date(r.timestamp).toLocaleTimeString('zh-TW', {hour: '2-digit', minute:'2-digit'});
+                    const iconClass = getIconForText(r.name);
+                    
+                    const card = document.createElement('div');
+                    card.className = 'flex items-center justify-between group border-b-[1.5px] border-[#F0EBE9] pb-4 mb-4 animate-scaleIn cursor-pointer';
+                    card.innerHTML = `
+                        <div class="flex items-center gap-4 min-w-0">
+                            <div class="w-12 h-12 bg-[#8D6E63] rounded-xl flex items-center justify-center text-white shadow-sm shrink-0 group-hover:scale-105 transition-transform">
+                                <i class="fa-solid ${iconClass} text-xl"></i>
+                            </div>
+                            <div class="flex flex-col min-w-0">
+                                <span class="text-[#3E2723] font-bold text-lg truncate">${escapeHtml(r.name)}</span>
+                                <span class="text-gray-400 text-xs tracking-wider"><i class="far fa-clock mr-1"></i>${timeStr} ${r.status === 'settled' ? '(已結算)' : ''}</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-end gap-1 shrink-0 ml-2">
+                            <span class="bg-[#C8E6C9] text-[#1B5E20] px-3 py-0.5 rounded-full font-bold text-sm min-w-[75px] text-center">
+                                + $${r.reward}
+                            </span>
+                            <button onclick="deleteRecord(${r.id})" class="text-[10px] text-gray-400 hover:text-red-400 underline mt-1 mr-1">撤銷</button>
+                        </div>
+                    `;
+                    listEl.appendChild(card);
+                });
+            }
+            totalDisplay.textContent = `共賺取 $${formatMoney(todayTotal)}`;
+        }
+
+        // --- View: History (明細) ---
+        function renderHistory() {
+            const listEl = document.getElementById('history-list');
+            listEl.innerHTML = '';
+            
+            if (window.records.length === 0 && window.redemptions.length === 0) {
+                listEl.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">尚無任何歷史紀錄</div>';
+                return;
+            }
+
+            const allEvents = [
+                ...window.records.map(r => ({ ...r, type: 'earn', dateObj: new Date(r.timestamp) })),
+                ...window.redemptions.map(r => ({ ...r, type: 'spend', dateObj: new Date(r.timestamp || r.date) }))
+            ].sort((a,b) => b.dateObj - a.dateObj);
+
+            const grouped = {};
+            allEvents.forEach(ev => {
+                const key = `${ev.dateObj.getFullYear()}年 ${ev.dateObj.getMonth()+1}月`;
+                if(!grouped[key]) grouped[key] = [];
+                grouped[key].push(ev);
+            });
+
+            for (const [monthKey, events] of Object.entries(grouped)) {
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'mb-6';
+                groupDiv.innerHTML = `<h3 class="text-xs font-bold text-[#8D6E63] mb-3 pl-1">${monthKey}</h3>`;
+                
+                const ul = document.createElement('div');
+                ul.className = 'space-y-0';
+                
+                events.forEach((ev, idx) => {
+                    const row = document.createElement('div');
+                    const isLast = idx === events.length - 1;
+                    row.className = `flex items-center justify-between group cursor-pointer ${isLast ? 'pb-2' : 'border-b-[1.5px] border-[#F0EBE9] pb-4 mb-4'}`;
+                    const dateStr = ev.dateObj.toLocaleDateString('zh-TW', {month:'numeric', day:'numeric'}) + ' ' + ev.dateObj.toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'});
+                    
+                    if (ev.type === 'earn') {
+                        const statusBadge = ev.status === 'settled' ? '<span class="text-[9px] bg-[#D7CCC8]/40 text-[#4E342E] px-1.5 py-0.5 rounded ml-1">已結算</span>' : '<span class="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded ml-1">未結算</span>';
+                        const iconClass = getIconForText(ev.name);
+
+                        row.innerHTML = `
+                            <div class="flex items-center gap-4 min-w-0">
+                                <div class="w-12 h-12 bg-[#8D6E63] rounded-xl flex items-center justify-center text-white shadow-sm shrink-0 group-hover:scale-105 transition-transform">
+                                    <i class="fa-solid ${iconClass} text-xl"></i>
+                                </div>
+                                <div class="flex flex-col min-w-0">
+                                    <span class="text-[#3E2723] font-bold text-lg truncate">${escapeHtml(ev.name)}</span>
+                                    <div class="text-gray-400 text-xs mt-0.5 flex items-center tracking-wide">${dateStr} ${statusBadge}</div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end gap-1 shrink-0 ml-2">
+                                <span class="bg-[#C8E6C9] text-[#1B5E20] px-3 py-0.5 rounded-full font-bold text-sm min-w-[75px] text-center">+ $${ev.reward}</span>
+                                <button onclick="deleteRecord(${ev.id})" class="text-[10px] text-gray-300 hover:text-red-400 mt-1 mr-1"><i class="fas fa-trash-alt"></i></button>
+                            </div>
+                        `;
+                    } else {
+                        // spend
+                        row.innerHTML = `
+                            <div class="flex items-center gap-4 min-w-0">
+                                <div class="w-12 h-12 bg-[#5D4037] rounded-xl flex items-center justify-center text-white shadow-sm shrink-0 group-hover:scale-105 transition-transform">
+                                    <i class="fa-solid fa-gift text-xl"></i>
+                                </div>
+                                <div class="flex flex-col min-w-0">
+                                    <span class="text-[#3E2723] font-bold text-lg truncate">兌換: ${escapeHtml(ev.text)}</span>
+                                    <div class="text-gray-400 text-xs mt-0.5 tracking-wide">${dateStr}</div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end shrink-0 ml-2">
+                                <span class="bg-[#D7CCC8] text-[#3E2723] px-3 py-0.5 rounded-full font-bold text-sm min-w-[75px] text-center">- $${ev.cost}</span>
+                            </div>
+                        `;
+                    }
+                    ul.appendChild(row);
+                });
+                groupDiv.appendChild(ul);
+                listEl.appendChild(groupDiv);
+            }
+        }
+
+        function forceSettle() {
+            if(pendingBalance <= 0) {
+                alert("目前沒有等待結算的累積金額喔！");
+                return;
+            }
+            if(confirm(`確定要提前結算嗎？這會把目前的 $${pendingBalance} 轉入可用金幣中。`)) {
+                window.records.forEach(r => { if(r.status === 'pending') r.status = 'settled'; });
+                saveData(); renderHistory(); alert("✅ 提前結算完成！");
+            }
+        }
+
+        // --- View: Shop ---
+        function renderShop() {
+            const shopListEl = document.getElementById('shop-list');
+            shopListEl.innerHTML = '';
+            
+            if(window.shopItems.length === 0) {
+                shopListEl.innerHTML = '<div class="text-center text-gray-400 py-10 text-sm">還沒有獎勵商品，新增一個吧！</div>';
+                return;
+            }
+
+            window.shopItems.forEach((item, idx) => {
+                const canAfford = availableBalance >= item.cost;
+                const isLast = idx === window.shopItems.length - 1;
+                const card = document.createElement('div');
+                card.className = `flex items-center justify-between group cursor-pointer ${isLast ? 'pb-2' : 'border-b-[1.5px] border-[#F0EBE9] pb-4 mb-4'} transition-opacity ${!canAfford ? 'opacity-60 grayscale-[30%]' : ''}`;
+                card.innerHTML = `
+                    <div class="flex items-center gap-4 min-w-0">
+                        <div class="w-12 h-12 bg-[#4E342E] rounded-xl flex items-center justify-center text-white shadow-sm shrink-0 group-hover:scale-105 transition-transform">
+                            <i class="fa-solid fa-store text-xl"></i>
+                        </div>
+                        <div class="flex flex-col min-w-0">
+                            <span class="text-[#3E2723] font-bold text-lg truncate">${escapeHtml(item.text)}</span>
+                            <span class="text-sm font-bold ${canAfford ? 'text-[#8D6E63]' : 'text-gray-400'} mt-0.5">$${formatMoney(item.cost)} ${!canAfford ? `<span class="font-normal text-red-400 ml-1 text-[10px]">(缺 $${item.cost - availableBalance})</span>` : ''}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-end gap-2 shrink-0 ml-2">
+                        <button onclick="redeemItem(${item.id})" ${!canAfford ? 'disabled' : ''} class="px-5 py-2 rounded-full text-sm font-bold text-white transition shadow-sm active:scale-95 ${canAfford ? 'bg-[#4E342E] hover:bg-[#3E2723]' : 'bg-gray-300 cursor-not-allowed'}">兌換</button>
+                        <button onclick="deleteShopItem(${item.id})" class="text-[10px] text-gray-400 hover:text-red-400 underline mr-1">刪除</button>
+                    </div>
+                `;
+                shopListEl.appendChild(card);
+            });
+        }
+
+        function addShopItem() {
+            const input = document.getElementById('shop-item-input');
+            const costInput = document.getElementById('shop-cost-input');
+            const text = input.value.trim();
+            const cost = parseInt(costInput.value);
+            if (text && cost > 0) {
+                window.shopItems.push({ id: Date.now(), text: text, cost: cost });
+                input.value = ''; costInput.value = ''; saveData(); renderShop();
+            } else { alert('請輸入商品名稱與正確金額'); }
+        }
+
+        function deleteShopItem(id) {
+            if(confirm('移除這個獎勵選項？')) { window.shopItems = window.shopItems.filter(item => item.id !== id); saveData(); renderShop(); }
+        }
+
+        function redeemItem(id) {
+            const item = window.shopItems.find(i => i.id === id);
+            if (item && availableBalance >= item.cost) {
+                if(confirm(`確定要花費可用金幣 $${item.cost} 兌換「${item.text}」嗎？`)) {
+                    window.redemptions.push({ id: Date.now(), itemId: item.id, text: item.text, cost: item.cost, timestamp: Date.now() });
+                    saveData(); renderShop();
+                    alert(`🎉 兌換成功！好好享受您的「${item.text}」吧！`);
+                }
+            } else { alert('可用金幣不足！請等待結算或多賺點累積。'); }
+        }
+
+        // --- View: Settings ---
+        function initSettingsSelect() {
+            const select = document.getElementById('settle-day-select');
+            select.innerHTML = '';
+            for(let i=1; i<=28; i++) {
+                const opt = document.createElement('option');
+                opt.value = i; opt.textContent = `每月 ${i} 號`;
+                if(i === parseInt(window.settings.settleDay)) opt.selected = true;
+                select.appendChild(opt);
+            }
+        }
+
+        function updateSettleDay() {
+            const val = document.getElementById('settle-day-select').value;
+            window.settings.settleDay = parseInt(val);
+            saveData(); checkAutoSettlement(); 
+        }
+
+        function renderSettingsItems() {
+            const list = document.getElementById('settings-items-list');
+            list.innerHTML = '';
+            window.settings.items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-2 bg-[#FAFAFA] p-2.5 rounded-xl border border-gray-100';
+                div.innerHTML = `
+                    <input type="text" class="flex-1 bg-transparent text-sm font-bold text-[#3E2723] outline-none focus:bg-white focus:ring-1 ring-[#D7CCC8] rounded px-1" value="${escapeHtml(item.name)}" onchange="updateItemName(${item.id}, this.value)">
+                    <span class="text-gray-400 font-bold">$</span>
+                    <input type="number" class="w-16 bg-transparent text-sm font-bold text-[#8D6E63] outline-none text-center focus:bg-white focus:ring-1 ring-[#D7CCC8] rounded px-1" value="${item.reward}" onchange="updateItemReward(${item.id}, this.value)">
+                    <button onclick="deleteSettingItem(${item.id})" class="text-gray-300 hover:text-red-400 p-1.5"><i class="fas fa-trash-alt"></i></button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function updateItemName(id, val) {
+            const item = window.settings.items.find(i => i.id === id);
+            if(item && val.trim()) { item.name = val.trim(); saveData(); renderQuickActions(); }
+        }
+
+        function updateItemReward(id, val) {
+            const item = window.settings.items.find(i => i.id === id);
+            const num = parseInt(val);
+            if(item && !isNaN(num) && num >= 0) { item.reward = num; saveData(); renderQuickActions(); }
+        }
+
+        function deleteSettingItem(id) {
+            if(confirm('刪除這個快捷項目？(不影響過去紀錄)')) {
+                window.settings.items = window.settings.items.filter(i => i.id !== id);
+                saveData(); renderSettingsItems(); renderQuickActions();
+            }
+        }
+
+        function clearAllData() {
+            if(confirm("⚠️ 警告：這將會清除您所有的紀錄、設定與金幣，並回復到初始狀態。確定要繼續嗎？")) {
+                if(confirm("請再次確認，清除後無法復原！")) {
+                    localStorage.removeItem('mySettings_v3');
+                    localStorage.removeItem('myRecords_v3');
+                    localStorage.removeItem('myShopItems_v3');
+                    localStorage.removeItem('myRedemptions_v3');
+                    location.reload();
+                }
+            }
+        }
+
+        // --- UI 控制 ---
+        let currentView = 'record';
+        function switchTab(tab) {
+            currentView = tab;
+            const views = { 'record': document.getElementById('view-record'), 'shop': document.getElementById('view-shop'), 'history': document.getElementById('view-history'), 'settings': document.getElementById('view-settings') };
+            const tabs = { 'record': document.getElementById('tab-record'), 'shop': document.getElementById('tab-shop'), 'history': document.getElementById('tab-history'), 'settings': document.getElementById('tab-settings') };
+
+            Object.values(views).forEach(el => { 
+                el.classList.add('translate-x-full'); 
+                el.classList.remove('z-20'); el.classList.add('z-10'); 
+                el.classList.add('opacity-0'); 
+            });
+            Object.values(tabs).forEach(el => { 
+                el.classList.remove('text-[#4E342E]'); 
+                el.classList.add('text-[#D7CCC8]'); 
+            });
+
+            views[tab].classList.remove('translate-x-full');
+            views[tab].classList.remove('opacity-0');
+            views[tab].classList.add('z-20');
+            tabs[tab].classList.add('text-[#4E342E]');
+            tabs[tab].classList.remove('text-[#D7CCC8]');
+
+            if (tab === 'record') { renderTodayRecords(); document.getElementById('record-input').focus(); }
+            else if (tab === 'shop') renderShop();
+            else if (tab === 'history') renderHistory();
+            else if (tab === 'settings') { initSettingsSelect(); renderSettingsItems(); }
+        }
+
+        // --- 初始化啟動 ---
+        function initApp() {
+            checkAutoSettlement();
+            calculateBalances();
+            renderQuickActions();
+            renderTodayRecords();
+            switchTab('record');
+        }
+
+        initApp();
+    </script>
+</body>
+</html>
