@@ -20,7 +20,8 @@
         window.handleLogout = function() {};
     </script>
 
-    <script type="module">
+<script type="module">
+        // 1. 從 CDN 引入所有需要的 Firebase 模組
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-analytics.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
@@ -38,20 +39,26 @@
             
             init: async function() {
                 try {
+                    // 2. 你的 Firebase 設定檔
                     const firebaseConfig = {
-                        apiKey: "AIzaSyB2HeIlJGFx9JIcuGvv9QNDfJJDJR5BaIU",
-                        authDomain: "a815355666-cf56b.firebaseapp.com",
-                        projectId: "a815355666-cf56b",
-                        storageBucket: "a815355666-cf56b.firebasestorage.app",
-                        messagingSenderId: "16313919572",
-                        appId: "1:16313919572:web:2ffceaea9952b1d309e5c1",
-                        measurementId: "G-51TP8K4BQY"
+                        apiKey: "AIzaSyAX__i7kulSMmAvJ-bRQgJ6dO34X3p09sM",
+                        authDomain: "lynn-b71e7.firebaseapp.com",
+                        projectId: "lynn-b71e7",
+                        storageBucket: "lynn-b71e7.firebasestorage.app",
+                        messagingSenderId: "562085932228",
+                        appId: "1:562085932228:web:e461083772e5b9a0736d91",
+                        measurementId: "G-E83J4PPH2N"
                     };
+
                     window.appId = firebaseConfig.projectId; 
+                    
+                    // 3. 啟動 Firebase 與各項服務
                     const app = initializeApp(firebaseConfig);
                     window.auth = getAuth(app);
                     window.db = getFirestore(app);
+                    const analytics = getAnalytics(app); // 啟動分析 (可選)
                     
+                    // 4. 監聽登入狀態並啟動你的系統邏輯
                     onAuthStateChanged(window.auth, async (user) => {
                         if (user) {
                             window.firestoreReady = true;
@@ -123,7 +130,6 @@
                 document.getElementById('display-username').textContent = user;
                 document.getElementById('cloud-indicator').classList.remove('hidden');
                 
-                // 處理登出按鈕顯示
                 const btnLogout = document.getElementById('btn-logout-actual');
                 if (btnLogout) {
                     btnLogout.classList.remove('hidden');
@@ -140,7 +146,6 @@
                 document.getElementById('auth-section-login-btn').classList.remove('hidden');
                 document.getElementById('cloud-indicator').classList.add('hidden');
                 
-                // 處理登出按鈕隱藏
                 const btnLogout = document.getElementById('btn-logout-actual');
                 if (btnLogout) {
                     btnLogout.classList.add('hidden');
@@ -170,9 +175,9 @@
             save: function() { if(this.isLoggedIn) this.saveDataToCloud(); }
         };
 
+        // 啟動雲端管理器
         window.CloudManager.init();
     </script>
-
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; background-color: #EFEBE9; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
